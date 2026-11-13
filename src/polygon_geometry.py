@@ -4,6 +4,47 @@ import cv2
 import numpy as np
 
 
+# Continuous semantic surfaces can share an outline. Keep instance geometry separate.
+MERGED_SURFACES = {"building", "road", "sidewalk", "sky", "terrain", "vegetation", "wall"}
+
+
+def merged_surface_polygons(surfaces, protected):
+    """Union a class before tracing it and bridge only small, unclaimed gaps."""
+    height, width = protected.shape
+    scale = min(width / 1280, height / 720)
+    radius = max(1, min(4, round(2 * scale)))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1))
+    max_hole = max(4, min(192, round(64 * scale ** 2)))
+    occupied = np.zeros(protected.shape, dtype=np.uint32)
+    for surface in surfaces.values():
+        occupied += surface
+    claimed = protected.copy()
+    for class_id, surface in surfaces.items():
+        blocked = claimed | (occupied > surface)
+        binary = surface.astype(np.uint8)
+        additions = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel).astype(bool) & ~surface
+
+        # Fill tiny enclosed voids, but preserve the entire hole if another label uses it.
+        count, components, stats, _ = cv2.connectedComponentsWithStats((~surface).astype(np.uint8), connectivity=4)
+        for index in range(1, count):
+            x, y, w, h, area = map(int, stats[index])
+            if area > max_hole or x == 0 or y == 0 or x + w == width or y + h == height:
+                continue
+            hole = components[y:y+h, x:x+w] == index
+            if not np.any(hole & blocked[y:y+h, x:x+w]):
+                additions[y:y+h, x:x+w] |= hole
+            else:
+                additions[y:y+h, x:x+w] &= ~hole
+        additions &= ~blocked
+        claimed |= additions
+        binary[additions] = 1
+        count, components, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=4)
+        for index in range(1, count):
+            x, y, w, h, _ = map(int, stats[index])
+            region = (components[y:y+h, x:x+w] == index).astype(np.uint8)
+            yield from ((class_id, points) for points in outlines(region, x, y))
+
+
 def simplified_contour(contour, pixels):
     x, y, width, height = cv2.boundingRect(contour)
     crop = pixels[y:y + height, x:x + width]

@@ -15,7 +15,7 @@ from drivable_area import AREA_LABELS, BOUNDARY_PROMPTS, DIVIDER_PROMPT, ROAD_PR
 from extra_geometry import HumanPose, centerlines, decode_mask, encode_mask, joint_indices, skeleton_edges
 from lane_markings import filter_double_white
 from local_annotation_review import CLASS_IDS, MODEL, SAM3_MODEL, VOID, Segmenter
-from polygon_geometry import outlines
+from polygon_geometry import MERGED_SURFACES, merged_surface_polygons, outlines
 from sam3_concepts import Sam3Concepts
 from yolo_bbox import COCO_LABELS, YoloDetector, intersection
 
@@ -31,6 +31,8 @@ def make_review(images, output, destination, mode, guideline, prompts, emit, *,
     names = tuple(prompts)
     polygon_names = tuple(guideline.segmentation) if mode == SAM3_MIXED else names
     polygon_ids = {prompt: index for index, prompt in enumerate(polygon_names)}
+    merged_ids = {polygon_ids[prompt] for prompt, label in guideline.segmentation.items()
+                  if label in MERGED_SURFACES and prompt in polygon_ids and mode != "bbox"}
     vegetation_prompt = next((prompt for prompt, label in guideline.segmentation.items()
                               if label == "vegetation" and prompt in polygon_ids), None) if mode != "bbox" else None
     use_semantic_vegetation = bool(vegetation_prompt and (semantic_model / "config.json").is_file())
@@ -68,6 +70,8 @@ def make_review(images, output, destination, mode, guideline, prompts, emit, *,
             image = file.convert("RGB")
         width, height = image.size
         ignored = ego_mask(width, height, number, False)
+        surfaces = {}
+        protected = ignored.copy() if merged_ids else None
         item = {"frame": number, "name": name, "width": width, "height": height,
                 "boxes": [], "issues": [], "polygons": [], "extra_shapes": []}
         if mode == "bbox":
@@ -114,9 +118,19 @@ def make_review(images, output, destination, mode, guideline, prompts, emit, *,
                                               "occluded": False, "truncated": left == 0 or top == 0
                                               or right == width or bottom == height})
                     if polygon:
-                        for points in outlines(crop, left, top):
-                            item["polygons"].append({"class_id": polygon_ids[prompt], "points": points})
+                        class_id = polygon_ids[prompt]
+                        if class_id in merged_ids:
+                            if class_id not in surfaces:
+                                surfaces[class_id] = np.zeros_like(ignored)
+                            surfaces[class_id] |= region != 0
+                        else:
+                            if protected is not None:
+                                protected |= region != 0
+                            for points in outlines(crop, left, top):
+                                item["polygons"].append({"class_id": class_id, "points": points})
                     if mask_label:
+                        if protected is not None:
+                            protected |= region != 0
                         item["extra_shapes"].append(dict(type="mask", label=mask_label, points=encode_mask(crop, left, top)))
                     if line_label:
                         item["extra_shapes"].extend(dict(type="polyline", label=line_label, points=points)
@@ -135,24 +149,25 @@ def make_review(images, output, destination, mode, guideline, prompts, emit, *,
                 if lane is None:
                     item["issues"].append({"location": area_prompts[prompt], "reason": reason})
                 else:
+                    if protected is not None:
+                        protected |= lane != 0
                     item["polygons"].extend({"class_id": polygon_ids[prompt], "points": points}
                                             for points in outlines(lane, 0, 0))
-        if vegetation_prompt and not any(p["class_id"] == polygon_ids[vegetation_prompt] for p in item["polygons"]):
+        if vegetation_prompt and polygon_ids[vegetation_prompt] not in surfaces:
             if vegetation_model is not None:
                 vegetation = (vegetation_model.predict(image, max(0.55, guideline.mask_min_score))
                               == CLASS_IDS["vegetation"]) & ~ignored
                 _, components, stats, _ = cv2.connectedComponentsWithStats(vegetation.astype(np.uint8), connectivity=4)
-                for idx, (left, top, w, h, area) in enumerate(stats.tolist()[1:], 1):
-                    if area < max(12, width * height / 30000):
-                        continue
-                    region = (components[top:top + h, left:left + w] == idx).astype(np.uint8)
-                    item["polygons"].extend({"class_id": polygon_ids[vegetation_prompt], "points": points}
-                                            for points in outlines(region, left, top))
-            recovered = sum(p["class_id"] == polygon_ids[vegetation_prompt] for p in item["polygons"])
-            if recovered:
-                emit("log", f"Frame {number} · SegFormer bổ sung {recovered} Polygon vegetation.")
-            else:
+                large = stats[:, cv2.CC_STAT_AREA] >= max(12, width * height / 30000)
+                large[0] = False
+                if large.any():
+                    surfaces[polygon_ids[vegetation_prompt]] = large[components]
+                    emit("log", f"Frame {number} · SegFormer tìm thấy vùng vegetation.")
+            if polygon_ids[vegetation_prompt] not in surfaces:
                 item["issues"].append({"location": "vegetation", "reason": "Chưa có đề xuất Polygon đủ tin cậy."})
+        if surfaces:
+            item["polygons"].extend({"class_id": class_id, "points": points}
+                                    for class_id, points in merged_surface_polygons(surfaces, protected))
         if pose:
             for keypoints in pose.predict(image):
                 for name, indices in joints.items():
