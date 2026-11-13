@@ -5,3 +5,13 @@ __pycache__/
 .venv/
 .env
 .env.*
+/models/sam3/
+*.csv
+*.pem
+*.key
+*.pfx
+/data/*.docx
+/data/*.pdf
+/review*/
+/bbox-*.html
+/bbox-*.json

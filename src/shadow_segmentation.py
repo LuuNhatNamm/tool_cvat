@@ -1,11 +1,5 @@
 """Luminance correction and conservative repair of shadowed road masks."""
 
-from hashlib import sha256
-
-
-FRAME_2_HASH = "20b3043e987ec64a51189e9fe962c0f466c39487ed561e4200309439af55e3d1"
-
-
 def relight_pavement(image):
     import cv2
     import numpy as np
@@ -52,24 +46,4 @@ def repair_shadowed_road(mask, relit_road, lifted, top_ids, margin, ignored, obj
 
 
 def reviewed_frame2(mask, source, ignored, class_ids):
-    """Keep the manually checked road and concrete boundaries tied to the supplied example."""
-    import cv2
-    import numpy as np
-
-    if mask.shape != (720, 1280) or sha256(source).hexdigest() != FRAME_2_HASH:
-        return {"road": 0, "wall": 0}
-    polygons = {
-        "road": [(0, 414), (144, 390), (319, 352), (505, 318), (612, 300), (735, 296),
-                 (788, 330), (891, 389), (955, 425), (1027, 469), (1109, 505),
-                 (800, 513), (470, 520), (0, 531)],
-        "wall": [(809, 310), (1000, 318), (1130, 322), (1279, 333), (1279, 503),
-                 (1172, 500), (1092, 475), (993, 420), (930, 386), (843, 337)],
-    }
-    changes = {}
-    for label, points in polygons.items():
-        area = np.zeros(mask.shape, dtype=np.uint8)
-        cv2.fillPoly(area, [np.asarray(points, dtype=np.int32)], 1)
-        change = (area == 1) & ~ignored & (mask != class_ids[label])
-        mask[change] = class_ids[label]
-        changes[label] = int(np.count_nonzero(change))
-    return changes
+    return {"road": 0, "wall": 0}

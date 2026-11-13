@@ -9,16 +9,24 @@ from pathlib import Path
 import re
 import sys
 
-from cvat_bbox_agent import ROOT, YOLO_WEIGHTS, frame_preview
+from cvat_bbox_agent import MAX_BATCH_IMAGES, ROOT, YOLO_WEIGHTS, frame_preview
 from annotation_scope import (VEHICLES, bounds, ego_mask, filter_yolo, reject_reason,
                               reviewed_corrections, reviewed_person, vehicle_wheel_region)
 from shadow_segmentation import relight_pavement, repair_shadowed_road, reviewed_frame2
 from segmentation_refinement import (deskew, fill_vehicle_mask_holes, frame_fingerprint,
                                      night_exposure, restore_deskewed, reviewed_surfaces)
+from sam3_refinement import Sam3Refiner, refine_objects
+from polygon_geometry import editable_polygons
 from yolo_bbox import YoloDetector, intersection, tile_starts
 
 
 MODEL = ROOT / "models" / "segformer-b0-cityscapes"
+SAM3_MODEL = ROOT / "models" / "sam3"
+
+
+def sam3_ready():
+    return (SAM3_MODEL / "config.json").is_file() and any(
+        (SAM3_MODEL / name).is_file() for name in ("model.safetensors", "model.safetensors.index.json"))
 PALETTE = {
     "road": "804080", "sidewalk": "F423E8", "building": "464646", "wall": "66669C",
     "fence": "BE9999", "pole": "999999", "traffic_light": "FAAA1E", "traffic_sign": "DCDC00",
@@ -29,7 +37,7 @@ PALETTE = {
 VOID = 255
 BBOX_CUES = {"person": "pedestrian", "rider": "rider", "traffic_light": "traffic light",
              "traffic_sign": "traffic sign"}
-PRIORITY_FRAMES = (2, 4, 6, 11)
+PRIORITY_FRAMES = ()
 STRUCTURAL_CLASSES = {name: list(PALETTE).index(name) for name in ("building", "pole")}
 CLASS_IDS = {name: i for i, name in enumerate(PALETTE)}
 
@@ -247,24 +255,7 @@ def filter_cues(cues, boxes, ignored):
     return selected, rejected
 
 
-def save_mask(image, mask, output, stem):
-    import numpy as np
-    from PIL import Image
-
-    palette = [tuple(bytes.fromhex(value)) for value in PALETTE.values()]
-    lut = np.zeros((256, 3), dtype=np.uint8)
-    lut[:len(palette)] = palette
-    lut[VOID] = (255, 255, 255)
-    indexed = Image.fromarray(mask).convert("P")
-    indexed.putpalette(lut.ravel().tolist())
-    indexed.save(output / f"{stem}-mask.png", transparency=VOID)
-    rgb = np.asarray(image).astype(np.float32)
-    mixed = rgb * 0.45 + lut[mask] * 0.55
-    mixed[mask == VOID] = rgb[mask == VOID]
-    Image.fromarray(mixed.astype(np.uint8)).save(output / f"{stem}-overlay.png")
-
-
-def render_frame(item, data, mime, stem):
+def render_frame(item, data, mime):
     preview = frame_preview(item, data, mime)
     extra = []
     for cue in item["semantic_box_cues"]:
@@ -286,12 +277,30 @@ def render_frame(item, data, mime, stem):
     checked = f" Hiệu chỉnh theo biên đã rà trên ảnh gốc: {checked}." if checked else ""
     return (f'<section id="frame-{item["frame"]}">' + preview +
             f'<p>Pixel cần review: {uncertainty:.1%}. Vùng xe mình bỏ qua: {ignored:.1%}.{scope_note} '
-            f'Hộp đã loại: {len(item["excluded_boxes"])}. <a href="{stem}-mask.png">Mask PNG</a></p>'
+            f'Hộp đã loại: {len(item["excluded_boxes"])}.</p>'
             f'<p>Bất đồng khi đổi sáng: {lighting:.1%}. Building: {building:,} px. Pole: {pole:,} px.</p>'
             f'<p>Bù vùng đường trong bóng: {road_repair:,} px.{checked}</p>'
             f'<p>Bù lỗ hổng trong thân xe: {item["vehicle_hole_pixels"]:,} px. '
             f'Bổ sung sau cân góc ảnh: {item["deskew_pixels"]:,} px.</p>'
-            f'<img src="{stem}-overlay.png" alt="Overlay segmentation frame {item["frame"]}" loading="lazy"></section>')
+            + polygon_preview(item, data, mime) + "</section>")
+
+
+def polygon_preview(item, data, mime):
+    width, height = item["width"], item["height"]
+    encoded = base64.b64encode(data).decode("ascii")
+    background = f'<image width="{width}" height="{height}" href="data:{mime};base64,{encoded}"/>'
+    names = list(PALETTE)
+    shapes = []
+    for shape in item["polygons"]:
+        source = names[shape["class_id"]]
+        label = escape(item.get("polygon_names", {}).get(source, source))
+        p = shape["points"]
+        coords = " ".join(f"{x:g},{y:g}" for x, y in zip(p[::2], p[1::2]))
+        shapes.append(f'<polygon points="{coords}" fill="#{PALETTE[source]}" fill-opacity=".55">'
+                      f'<title>{label}</title></polygon>')
+    return (f'<p>Segmentation · {len(shapes)} Polygon</p>'
+            f'<svg viewBox="0 0 {width} {height}" aria-label="Polygon segmentation">'
+            + background + "".join(shapes) + "</svg>")
 
 
 def main():
@@ -299,15 +308,15 @@ def main():
         if not stream.isatty() and hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", type=Path, default=ROOT / "bbox-job-222-yolo.html")
-    parser.add_argument("--output", type=Path, default=ROOT / "review-job-222-seg-refined")
+    parser.add_argument("--source", type=Path, default=ROOT / "bbox-review.html")
+    parser.add_argument("--output", type=Path, default=ROOT / "semantic-review")
     parser.add_argument("--checkpoint", type=Path, default=MODEL)
-    parser.add_argument("--limit", type=int)
+    parser.add_argument("--limit", type=int, default=5, help="số ảnh xử lý, tối đa 10")
     parser.add_argument("--frame", type=int, help="chỉ xử lý frame này trong nguồn ảnh")
     parser.add_argument("--mask-confidence", type=float, default=0.55)
-    parser.add_argument("--camera-profile", choices=("auto", "job-222", "none"), default="auto")
+    parser.add_argument("--sam3", action="store_true", help="tinh chỉnh biên Polygon từ BBox YOLO bằng SAM 3")
     args = parser.parse_args()
-    if (args.limit is not None and args.limit < 1) or not 0 < args.mask_confidence <= 1:
+    if not 1 <= args.limit <= MAX_BATCH_IMAGES or not 0 < args.mask_confidence <= 1:
         parser.error("Kiểm tra giá trị --limit và --mask-confidence.")
     if args.output.exists():
         parser.error("Chọn thư mục --output mới.")
@@ -316,21 +325,21 @@ def main():
     if not args.checkpoint.is_dir():
         parser.error(f"Thiếu checkpoint SegFormer tại {args.checkpoint}.")
 
-    job_222 = args.camera_profile == "job-222" or (
-        args.camera_profile == "auto" and args.source.resolve() == ROOT / "bbox-job-222-yolo.html")
+    camera_profile = False
     try:
-        generate_review(load_images(args.source), args.output, checkpoint=args.checkpoint, job_222=job_222,
-                        frame=args.frame, limit=args.limit, mask_confidence=args.mask_confidence)
+        generate_review(load_images(args.source), args.output, checkpoint=args.checkpoint, camera_profile=camera_profile,
+                        frame=args.frame, limit=args.limit, mask_confidence=args.mask_confidence, use_sam3=args.sam3)
         print(args.output / "index.html")
     except ValueError as exc:
         parser.error(str(exc))
 
 
-def generate_review(images, output, *, checkpoint=MODEL, job_222=False, frame=None, limit=None,
-                    mask_confidence=0.55, progress=print, destination=None, guideline=None):
+def generate_review(images, output, *, checkpoint=MODEL, camera_profile=False, frame=None, limit=None,
+                    mask_confidence=0.55, progress=print, destination=None, guideline=None, use_sam3=False):
     import numpy as np
     from PIL import Image
 
+    sam3 = Sam3Refiner(SAM3_MODEL) if use_sam3 else None
     segmenter = Segmenter(checkpoint)
     detector = YoloDetector(YOLO_WEIGHTS, guideline.bbox_min_score if guideline else 0.30)
     if guideline:
@@ -343,7 +352,7 @@ def generate_review(images, output, *, checkpoint=MODEL, job_222=False, frame=No
         with Image.open(BytesIO(data)) as file:
             image = file.convert("RGB")
         width, height = image.size
-        ignored = ego_mask(width, height, number, job_222)
+        ignored = ego_mask(width, height, number, camera_profile)
         detection = detector.predict_image(image)
         if not guideline:
             detection["issues"].extend(reviewed_corrections(detection["boxes"], data, ignored))
@@ -379,22 +388,33 @@ def generate_review(images, output, *, checkpoint=MODEL, job_222=False, frame=No
             raw_cues.append(person)
         cues, excluded_cues = filter_cues(raw_cues, detection["boxes"], ignored)
         scope_pixels = 0
+        prompts = detection["boxes"]
         if guideline:
-            def allowed(box):
+            def large_enough(box):
                 points = bounds(box, width, height)
-                return (box["label"] in guideline.bbox
-                        and intersection(points, points) >= guideline.bbox_min_area_px)
+                return intersection(points, points) >= guideline.bbox_min_area_px
+
+            def allowed(box):
+                return box["label"] in guideline.bbox and large_enough(box)
 
             excluded.extend({**b, "reason": "customer_guideline_scope"} for b in detection["boxes"] if not allowed(b))
             detection["boxes"] = [b for b in detection["boxes"] if allowed(b)]
             cues = [b for b in cues if allowed(b)]
+            if guideline.bbox:
+                prompts = detection["boxes"]
+            else:
+                prompts = [b for b in prompts if large_enough(b)]
+        sam_result = (refine_objects(sam3, image, mask, prompts, ignored, CLASS_IDS,
+                                     allowed_classes=guideline.segmentation if guideline else None)
+                      if sam3 is not None else None)
+        if guideline:
             excluded_pixels = (mask != VOID) & ~np.isin(mask, [CLASS_IDS[n] for n in guideline.segmentation])
             scope_pixels = int(np.count_nonzero(excluded_pixels))
             mask[excluded_pixels] = VOID
-        stem = f"frame-{number:06d}"
-        save_mask(image, mask, output, stem)
+        polygons = [{"class_id": label, "points": points}
+                    for label, points in editable_polygons(mask, CLASS_IDS.values())]
         item = {"frame": number, "name": name, "width": width, "height": height, **detection,
-                "semantic_box_cues": cues, "mask": f"{stem}-mask.png",
+                "semantic_box_cues": cues, "polygons": polygons,
                 "ignored_pixels": int(np.count_nonzero(ignored)),
                 "uncertain_pixels": int(np.count_nonzero((mask == VOID) & ~ignored)) - scope_pixels,
                 "out_of_scope_pixels": scope_pixels,
@@ -407,35 +427,40 @@ def generate_review(images, output, *, checkpoint=MODEL, job_222=False, frame=No
                 "structural_recovered_pixels": recovered,
                 "excluded_boxes": excluded + excluded_cues,
                 "present_classes": [segmenter.names[i] for i in np.unique(mask) if i != VOID]}
+        if sam_result is not None:
+            item["sam3"] = sam_result
         frames.append(item)
         display = item
         if guideline:
-            display = {**item, **{key: [{**box, "label": guideline.bbox[box["label"]]} for box in item[key]]
+            display = {**item, "polygon_names": guideline.segmentation, **{key: [{**box, "label": guideline.bbox[box["label"]]} for box in item[key]]
                                   for key in ("boxes", "semantic_box_cues")}}
-        sections[number] = render_frame(display, data, mime, stem)
+        sections[number] = render_frame(display, data, mime)
+        sam_log = f" · SAM 3 giữ {sam_result['accepted']}/{sam_result['prompted']} vùng" if sam_result is not None else ""
         progress(f"Frame {number} · {len(item['boxes'])} BBox · {len(cues)} gợi ý · "
-                 f"{len(item['present_classes'])} lớp segmentation.")
+                 f"{len(item['present_classes'])} lớp segmentation{sam_log}.")
         if len(frames) == limit:
             break
     if not frames:
         raise ValueError("Nguồn không có ảnh hoặc frame được chọn.")
-    priority = {number: i for i, number in enumerate(PRIORITY_FRAMES)} if job_222 else {}
+    priority = {number: i for i, number in enumerate(PRIORITY_FRAMES)} if camera_profile else {}
     ordered = sorted(frames, key=lambda f: (priority.get(f["frame"], len(priority)),
                                            -f["uncertain_pixels"] / (f["width"] * f["height"]), f["frame"]))
     order = [frame["frame"] for frame in ordered]
     report = {"class_ids": list(PALETTE), "palette": PALETTE, "void_id": VOID,
-              "camera_profile": "job-222" if job_222 else "none", "review_order": order, "frames": frames}
+              "camera_profile": "none", "review_order": order, "frames": frames}
     if destination is not None:
         report["destination"] = destination
     if guideline is not None:
         report["customer_guideline"] = guideline.metadata()
+    if sam3 is not None:
+        report["mask_refinement"] = "sam3_box_prompts"
     (output / "review.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     legend = " ".join(f'<span style="border-left:12px solid #{PALETTE[label]};padding-left:4px">{escape(name)}</span>'
                       for label, name in (guideline.segmentation.items() if guideline else ((n, n) for n in PALETTE)))
     rules = (f'<p>Guideline {escape(guideline.source)} · Điểm YOLO tối thiểu {guideline.bbox_min_score:g} '
              f'· Diện tích hộp tối thiểu {guideline.bbox_min_area_px} px².</p>' if guideline else "")
-    mask_note = ("Vùng ngoài phạm vi và vùng thiếu chắc chắn dùng ID 255 trong mask." if guideline else
-                 "Lượt cân bằng sáng cục bộ tìm lại vùng đường trong bóng. Vùng thiếu chắc chắn và vùng xe mình dùng ID 255 trong mask.")
+    mask_note = ("Polygon để trống vùng ngoài phạm vi hoặc thiếu chắc chắn." if guideline else
+                 "Lượt cân bằng sáng cục bộ tìm lại vùng đường trong bóng. Polygon để trống vùng thiếu chắc chắn và vùng xe mình.")
     html = ('<!doctype html><html lang="vi"><meta charset="utf-8"><title>Kiểm tra BBox và segmentation</title>'
             '<style>body{font:16px system-ui;max-width:1280px;margin:auto;padding:1rem}'
             'img,svg{width:100%;display:block}rect{fill:none;stroke:#00ff86;stroke-width:2}'

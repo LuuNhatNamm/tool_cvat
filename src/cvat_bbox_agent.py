@@ -31,11 +31,12 @@ GUIDELINE = ROOT / "docs" / "BBOX_ANNOTATION_GUIDELINE.md"
 TOKEN_FILE = ROOT / "config" / "access_tokens.csv"
 YOLO_WEIGHTS = ROOT / "models" / "yolo11n.pt"
 OLLAMA = "http://127.0.0.1:11434"
-SERVER = "https://cvat.edufun.ai"
-ORGANIZATION = "cohort-5a"
-TASK_ID = 75
-JOB_ID = 222
+SERVER = os.getenv("CVAT_SERVER", "").rstrip("/")
+ORGANIZATION = os.getenv("CVAT_ORGANIZATION", "")
+TASK_ID = int(os.getenv("CVAT_TASK_ID", "0"))
+JOB_ID = int(os.getenv("CVAT_JOB_ID", "0"))
 DUPLICATE_IOU = 0.85
+MAX_BATCH_IMAGES = 10
 
 
 class AgentError(Exception):
@@ -98,6 +99,8 @@ def read_ollama_chat(response):
 
 class CVAT:
     def __init__(self, *, server=SERVER, organization=ORGANIZATION, task_id=TASK_ID, job_id=JOB_ID, token=None):
+        if not server or task_id <= 0 or job_id <= 0:
+            raise AgentError("Nhập link job trong Job Runner, hoặc đặt CVAT_SERVER, CVAT_TASK_ID và CVAT_JOB_ID khi dùng CLI.")
         self.server, self.organization = server, organization
         self.task_id, self.job_id = task_id, job_id
         legacy = None
@@ -306,6 +309,8 @@ def preview(args, cvat, job, frames):
             raise AgentError(f"Frame {args.frame} không có trong job.")
         available = available[available.index(args.frame):]
     selected = available if args.all else available[:args.limit]
+    if len(selected) > MAX_BATCH_IMAGES:
+        raise AgentError("Mỗi lượt tối đa 10 ảnh. Dùng --frame và --limit để chọn nhóm ảnh.")
     if not selected:
         raise AgentError("Job không có frame phù hợp.")
     cvat.labels(job["id"])
@@ -338,7 +343,7 @@ def preview(args, cvat, job, frames):
         print(f"Frame {number}: đang nhận diện bằng {args.model}…", flush=True)
         result = detector.predict(image, item) if detector is not None else predict(args.model, image, guideline)
         if detector is not None:
-            ignored = ego_mask(item["width"], item["height"], number, job_222=True)
+            ignored = ego_mask(item["width"], item["height"], number, False)
             result["issues"].extend(reviewed_corrections(result["boxes"], image, ignored))
             result["boxes"], item["excluded_boxes"] = filter_yolo(result["boxes"], ignored, image)
         item.update(boxes=[], issues=result["issues"])
@@ -373,6 +378,8 @@ def check_assignee(cvat, job):
 
 def apply(args, cvat, job, frames):
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
+    if not 1 <= len(plan["frames"]) <= MAX_BATCH_IMAGES:
+        raise AgentError("Bản đề xuất cần chứa từ 1 đến 10 ảnh.")
     identity = (SERVER, ORGANIZATION, TASK_ID, JOB_ID)
     if tuple(plan[key] for key in ("server", "org", "task", "job")) != identity:
         raise AgentError("File đề xuất thuộc máy chủ, Organization, task hoặc job khác.")
@@ -406,9 +413,9 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     inspect = sub.add_parser("preview", help="nhận diện local và xuất JSON/HTML xem trước")
     inspect.add_argument("--model", default="yolo11n")
-    auto = sub.add_parser("run", help="chạy YOLO và ghi BBox vào job 222 trong một lệnh")
+    auto = sub.add_parser("run", help="chạy YOLO và ghi BBox vào job đã cấu hình trong một lệnh")
     auto.set_defaults(model="yolo11n")
-    for command, default_limit in ((inspect, 1), (auto, None)):
+    for command, default_limit in ((inspect, 1), (auto, 5)):
         command.add_argument("--frame", type=int, help="frame bắt đầu, dùng số frame của CVAT")
         scope = command.add_mutually_exclusive_group()
         scope.add_argument("--limit", type=int, default=default_limit)
@@ -419,8 +426,8 @@ def main():
     save.add_argument("--plan", required=True, type=Path)
     args = parser.parse_args()
     if args.command in {"preview", "run"}:
-        if args.limit is not None and args.limit < 1:
-            parser.error("--limit phải lớn hơn 0")
+        if not 1 <= args.limit <= MAX_BATCH_IMAGES:
+            parser.error("--limit phải từ 1 đến 10")
         if not 0 < args.confidence <= 1:
             parser.error("--confidence phải lớn hơn 0 và không quá 1")
     try:

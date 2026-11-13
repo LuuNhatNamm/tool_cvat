@@ -43,7 +43,7 @@ def merge_detections(detections):
     return kept
 
 
-def guideline_proposals(detections, width, height, confidence):
+def guideline_proposals(detections, width, height, confidence, class_names=COCO_LABELS):
     boxes, issues = [], []
     cycles = [p for name, score, p in detections if name in {"bicycle", "motorcycle"} and score >= confidence]
 
@@ -52,12 +52,12 @@ def guideline_proposals(detections, width, height, confidence):
         issues.append({"type": kind, "location": location, "reason": reason})
 
     for i, (name, score, points) in enumerate(detections):
-        label = COCO_LABELS[name]
+        label = class_names[name]
         x1, y1, x2, y2 = points
         if score < confidence:
             flag("LOW_VISIBILITY", label, points, f"Điểm YOLO {score:.2f}; kiểm tra có đối tượng thật không.")
             continue
-        if name == "person":
+        if name == "person" and label == "pedestrian":
             center = (x1 + x2) / 2
             if any(bike[0] <= center <= bike[2] and intersection(points, bike) > 0 for bike in cycles):
                 flag("UNCERTAIN_CLASS", label, points, "Người chồng lên xe hai bánh; phân biệt pedestrian và rider.")
@@ -81,11 +81,12 @@ def guideline_proposals(detections, width, height, confidence):
 
 
 class YoloDetector:
-    def __init__(self, weights, confidence=0.30):
+    def __init__(self, weights, confidence=0.30, *, class_names=COCO_LABELS):
         from ultralytics import YOLO
 
         self.model = YOLO(str(weights), task="detect")
         self.confidence = confidence
+        self.class_names = class_names
 
     def detect(self, image, size):
         result = self.model.predict(image, imgsz=size, device="cpu",
@@ -93,7 +94,7 @@ class YoloDetector:
         boxes = result.boxes
         return [(result.names[int(cls)], score, points) for cls, score, points in
                 zip(boxes.cls.tolist(), boxes.conf.tolist(), boxes.xyxy.tolist())
-                if result.names[int(cls)] in COCO_LABELS]
+                if result.names[int(cls)] in self.class_names]
 
     def predict_image(self, image):
         width, height = image.size
@@ -111,7 +112,7 @@ class YoloDetector:
                             or (bottom < height and y2 >= tile_h - 2)):
                         continue
                     detections.append((name, score, [x1 + left, y1 + top, x2 + left, y2 + top]))
-        return guideline_proposals(merge_detections(detections), width, height, self.confidence)
+        return guideline_proposals(merge_detections(detections), width, height, self.confidence, self.class_names)
 
     def predict(self, data, frame):
         from PIL import Image

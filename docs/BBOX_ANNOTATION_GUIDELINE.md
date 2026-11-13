@@ -1,10 +1,10 @@
 # Hướng dẫn gán Bounding Box trên CVAT
 
-Áp dụng cho agent gán BBox trên ảnh giao thông của cohort 5A. Bộ ảnh được mô tả trong bài là `.jpg`, 1280 × 720 px. Phạm vi công việc là vẽ và kiểm tra BBox trên các frame của job được giao.
+Áp dụng cho agent gán BBox trên ảnh giao thông. Bộ ảnh được mô tả trong bài là `.jpg`, 1280 × 720 px. Phạm vi công việc là vẽ và kiểm tra BBox trên các frame của job được giao.
 
 ## 1. Kiểm tra job trước khi vẽ
 
-1. Chọn Organization `cohort-5a`, vào **Jobs** và mở đúng job được giao. Nếu công cụ đã mở sẵn job, đối chiếu Organization và job trước khi sửa.
+1. Chọn Organization của job, vào **Jobs** và mở đúng job được giao. Nếu công cụ đã mở sẵn job, đối chiếu Organization và job trước khi sửa.
 2. Kiểm tra công cụ `Rectangle`, bộ nhãn và các thuộc tính của job. Khi job hoặc cấu hình không khớp, báo rõ điểm khác biệt cho lead để xác nhận. Dùng cấu hình có sẵn của job, giữ nguyên project, task, bộ nhãn và phân công.
 3. Gán nhãn từ ảnh gốc. Bỏ qua annotation hoặc ground truth có sẵn dưới dạng tài liệu tham chiếu. Giữ các hộp hợp lệ đã lưu trong job khi tiếp tục công việc và kiểm tra để tránh tạo hộp trùng.
 
@@ -25,9 +25,9 @@ Dùng đúng tên nhãn trong bảng. Mỗi đối tượng hợp lệ có một
 | `traffic light` | Cụm đèn tín hiệu giao thông. Bám theo cụm đèn, bỏ phần cột hoặc giá đỡ nhô ra. |
 | `traffic sign` | Mặt biển báo giao thông. Bám theo biển, bỏ phần cột hoặc giá đỡ nhô ra. |
 
-Bỏ qua đối tượng ngoài danh sách, bóng đổ, phản chiếu và ảnh của đối tượng trên bảng quảng cáo hoặc màn hình. Bản review job 222 dùng quy ước `van → car`. Nếu chưa phân biệt được thân van và thân xe tải, ghi `UNCERTAIN_CLASS`.
+Bỏ qua đối tượng ngoài danh sách, bóng đổ, phản chiếu và ảnh của đối tượng trên bảng quảng cáo hoặc màn hình. Nếu chưa phân biệt được thân van và thân xe tải, ghi `UNCERTAIN_CLASS`.
 
-Trong bản review cục bộ job 222, bỏ hộp dưới **150 px²** tính theo độ phân giải ảnh gốc, và bỏ hộp có tâm nằm trong vùng capô, taplo hoặc phụ kiện của xe ghi hình. Vùng xe ghi hình có ID 255 trong mask. Hộp YOLO dưới 0,30 chỉ được ghi chú để review. Hộp vàng từ mask cần xác minh đối tượng riêng trước khi dùng làm BBox.
+Trong bản review cục bộ, bỏ hộp dưới **150 px²** tính theo độ phân giải ảnh gốc, và bỏ hộp có tâm nằm trong vùng capô, taplo hoặc phụ kiện của xe ghi hình. Vùng xe ghi hình có ID 255 trong mask. Hộp YOLO dưới 0,30 chỉ được ghi chú để review. Hộp vàng từ mask cần xác minh đối tượng riêng trước khi dùng làm BBox.
 
 ## 3. Quy tắc vẽ hộp
 
@@ -79,6 +79,4 @@ UNCERTAIN_CLASS | Frame 018 | Xe giữa ảnh | Chỉ thấy đầu xe, chưa đ
 
 ## Tài liệu tham chiếu
 
-- `BBox_Polygon_Polyline_Annotation_Guideline_V1.docx` — Nhãn BBox, quy tắc hình học, ngưỡng 80%, thuộc tính và tiêu chí kiểm tra.
-- `huong-dan-annotate-cvat-v2.pdf` — Thao tác trên CVAT, lưu, nộp và xử lý Issue.
-- `Semantic_Segmentation_Annotation_Guideline_V1.docx` — Tham khảo cách rà các đối tượng nhỏ, phân biệt đèn và cột, và xử lý ca khó. Quy tắc lấy phần nhìn thấy được dùng làm mặc định thực hành cho BBox trong hướng dẫn này.
+Xem [guideline giao thông V2](../data/Guideline_Gan_Nhan_Giao_Thong_CVAT_V2.md).

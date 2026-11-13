@@ -1,36 +1,45 @@
-# Guideline khách hàng cho job CVAT
+# Guideline gán nhãn CVAT cho [tên job]
 
-Điền loại dữ liệu, điều kiện gán nhãn và các trường hợp cần reviewer quyết định. Bảng dưới là ví dụ cho ảnh giao thông 2D. Thay tên và nội dung theo job của bạn.
+Sao chép file này cho từng job. Thay các nhãn minh họa bằng tên chính xác trong **Labels** trên CVAT, kể cả dấu cách và chữ hoa. Điền mô tả nghiệp vụ bằng tiếng Việt nếu thuận tiện. Với SAM 3, nên dùng cụm từ tiếng Anh mô tả đối tượng nhìn thấy trong ảnh.
 
-## Danh sách nhãn
+## Phạm vi
 
-| Tên nhãn trong CVAT | Loại shape | Ý nghĩa và điều kiện gán | Ví dụ |
-|---|---|---|---|
-| `car` | Rectangle | Vẽ một hộp sát mỗi ô tô con nhìn thấy rõ. | Xe con màu trắng đang đi trên đường. |
-| `road` | Mask | Gán phần mặt đường nhìn thấy. | Mặt đường liên tục qua vùng bóng đổ. |
-| `building` | Mask | Gán bề mặt công trình. | Mặt tiền tòa nhà nhìn từ đường. |
+Ghi loại ảnh, các đối tượng hoặc vùng cần gán, và các điều kiện loại trừ áp dụng cho cả job.
 
-## Trường hợp cần review
+## Ý nghĩa nhãn và cách vẽ
 
-| Tình huống | Dấu hiệu | Cách xử lý |
+| Tên nhãn CVAT | Khi nào gán | Cách vẽ và ví dụ |
 |---|---|---|
-| Không rõ một vùng thuộc `road` hay `building` | Bóng đậm hoặc mép vật thể không nhìn rõ | Ghi frame, vị trí, dấu hiệu còn thiếu và câu hỏi cần reviewer chốt. |
+| `[Tên chính xác]` | [Dấu hiệu đủ để gán] | [Cách xác định biên, tách các đối tượng, xử lý phần khuất] |
 
-## Cấu hình dùng trong tool
+## Ca dễ nhầm và checklist review
 
-Trong mỗi ánh xạ, khóa là tên lớp mà model nhận ra và giá trị là tên nhãn chính xác đã cấu hình trên CVAT. Xóa dòng của những lớp ngoài phạm vi. Khi chỉ chạy một loại shape, có thể bỏ bảng ánh xạ còn lại.
+| Tình huống | Cách xử lý |
+|---|---|
+| [Hai nhãn dễ nhầm] | [Dấu hiệu để chọn nhãn đúng] |
+| [Biên khuất, bóng đổ hoặc phản chiếu] | [Ghi vùng cần đối chiếu, thuộc tính cần kiểm tra] |
+| [Thiếu bằng chứng] | [Ghi số frame, vị trí và điểm cần người review chốt] |
+
+## Cấu hình cho Job Runner
+
+Giữ đúng một khối `cvat-guideline` và dùng JSON hợp lệ. Khóa trong `labels` là tên nhãn CVAT. `yolo_class` dùng cho `rectangle`. `sam3_prompt` dùng cho `rectangle`, `polygon`, `polyline` và `mask`. Có thể điền mô tả trong tool. Nhãn `skeleton` dùng model pose người và lấy cấu trúc điểm từ CVAT.
 
 ```cvat-guideline
 {
-  "version": 1,
-  "bbox": {"car": "car"},
-  "segmentation": {"road": "road", "building": "building"},
-  "bbox_min_score": 0.40,
-  "bbox_min_area_px": 250,
-  "mask_min_score": 0.60
+  "version": 2,
+  "labels": {
+    "nhan_vat_the": {"shape": "rectangle", "yolo_class": "bottle", "sam3_prompt": "plastic bottle"},
+    "nhan_vung": {"shape": "polygon", "sam3_prompt": "liquid spill on the floor"},
+    "nhan_duong": {"shape": "polyline", "sam3_prompt": "painted line on the floor"},
+    "nhan_mask": {"shape": "mask", "sam3_prompt": "liquid spill on the floor"},
+    "nhan_pose_nguoi": {"shape": "skeleton"}
+  },
+  "bbox_min_score": 0.30,
+  "bbox_min_area_px": 150,
+  "mask_min_score": 0.50
 }
 ```
 
-Nguồn BBox hỗ trợ `pedestrian`, `bicycle`, `car`, `motorcycle`, `bus`, `train`, `truck`, `traffic light` và `traffic sign` (YOLO COCO chỉ phát hiện biển STOP). Nguồn segmentation hỗ trợ `road`, `sidewalk`, `building`, `wall`, `fence`, `pole`, `traffic_light`, `traffic_sign`, `vegetation`, `terrain`, `sky`, `person`, `rider`, `car`, `truck`, `bus`, `train`, `motorcycle` và `bicycle`.
+Các ngưỡng là tùy chọn. `bbox_min_score` áp dụng cho YOLO. `bbox_min_area_px` lọc Rectangle từ cả YOLO và SAM 3. `mask_min_score` là điểm nhận diện tối thiểu của SAM 3 cho cả Rectangle và Polygon.
 
-Các ví dụ và quy tắc bằng văn bản dành cho người review. Chuyển yêu cầu máy có thể kiểm tra thành ánh xạ hoặc ngưỡng trong khối cấu hình. Với lớp mới hoặc quy tắc nghiệp vụ khác, người vận hành cần chọn model hoặc bổ sung logic trước khi chạy tự động.
+Trong Job Runner, chọn file, tải nhãn từ job và tick các nhãn cần chạy. Tool dùng cấu hình trên để kiểm tra kiểu shape và điền gợi ý cho model. Phần quy tắc bằng chữ dùng khi review. Bấm **Chạy xem trước**, kiểm tra kết quả rồi mới bấm **Lưu lên CVAT**.
