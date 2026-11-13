@@ -1,32 +1,42 @@
-# Guideline gán nhãn cho [tên job]
+# Cấu trúc guideline gán nhãn cho một job CVAT
 
-[Ghi loại dữ liệu, đơn vị được gán nhãn và số label có thể gán cho một đơn vị nếu điều này ảnh hưởng đến cách chọn nhãn. Ví dụ “Mỗi phản hồi được gán một label theo yêu cầu chính của khách hàng.”]
+Sao chép [mẫu Markdown V2](Mau_Guideline_Khach_Hang_CVAT.md) để tạo file cho job mới. Xin quy tắc từ người giao job và lấy tên nhãn từ **Labels** của task hoặc project. Dùng cấu trúc này cho bất kỳ bộ ảnh 2D nào mà tool hỗ trợ.
 
-## Phần 1 Danh sách label và ý nghĩa
+## Phạm vi
 
-| Tên label | Ý nghĩa và điều kiện gán | Dễ nhầm với label nào | Ví dụ điển hình |
-| --- | --- | --- | --- |
-| `[tên chính xác trong hệ thống]` | [Đối tượng, vùng hoặc nội dung nào đủ điều kiện nhận label này] | [Label gần nhất và dấu hiệu phân biệt] | [Một trường hợp rõ ràng và label cần gán] |
+Ghi loại ảnh, đối tượng hoặc vùng cần gán và các trường hợp loại trừ. Nêu yêu cầu về kích thước, độ nhìn thấy hoặc số lượng annotation nếu dự án có quy định.
 
-Thêm một dòng cho mỗi label hợp lệ. Nếu một label bắt buộc có loại annotation hoặc thuộc tính cụ thể, thêm cột tương ứng. Nếu job có nhiều bộ label, ghi rõ mỗi bộ áp dụng cho loại dữ liệu hoặc đơn vị nào.
+## Danh sách nhãn và cách vẽ
 
-## Phần 2 Tình huống dễ nhầm và cách xử lý
+| Tên chính xác trên CVAT | Kiểu shape | Khi nào gán | Cách vẽ và ví dụ |
+|---|---|---|---|
+| `[tên nhãn]` | `[kiểu shape]` | [Dấu hiệu đủ để gán và trường hợp loại trừ] | [Cách đặt biên, tách đối tượng hoặc xử lý phần bị che. Thêm một ví dụ rõ.] |
 
-| Label liên quan | Tình huống và dấu hiệu nhận biết | Cách xử lý | Ví dụ và kết quả mong đợi |
-| --- | --- | --- | --- |
-| `[label A]`, `[label B]` | [Cùng một dữ liệu thỏa điều kiện của hai label] | [Khi nào chọn A, khi nào chọn B hoặc khi nào gán cả hai nếu job cho phép] | [Dữ liệu cụ thể → label cần gán và lý do] |
-| `[label A]` | [Dữ liệu thiếu dấu hiệu để kết luận] | [Nêu dấu hiệu tối thiểu cần có. Nếu thiếu, ghi hành động đã được job quy định, chẳng hạn chuyển review] | [Dữ liệu thiếu dấu hiệu nào → hành động tương ứng] |
-| [Các label áp dụng] | [Trường hợp có vẻ liên quan nhưng nằm ngoài phạm vi] | [Chỉ rõ điều kiện loại trừ và cách ghi nhận theo quy định của job] | [Dữ liệu cụ thể → kết quả] |
+Thêm một dòng cho mỗi nhãn. Nếu có thuộc tính như `occluded` hoặc `truncated`, ghi điều kiện bật và ví dụ.
 
-Chỉ đưa vào các tình huống có thể làm thay đổi label, số lượng nhãn, phạm vi hoặc thuộc tính. Nếu quy tắc áp dụng cho nhiều label, ghi một dòng chung và chỉ rõ phạm vi áp dụng.
+## Tình huống dễ nhầm và kiểm tra kết quả
 
-## Phần 3 Trường hợp guideline chưa có quy tắc
+| Tình huống | Cách xử lý |
+|---|---|
+| Hai nhãn có hình dạng gần giống | Ghi dấu hiệu để phân biệt và ví dụ cho từng nhãn. |
+| Đối tượng bị khuất hoặc cắt ở mép | Ghi cách đặt biên và thuộc tính cần bật. |
+| Ảnh thiếu sáng, chói hoặc mờ | Ghi khi nào có thể gán và khi nào chuyển người review. |
 
-| Cần ghi trong Issue | Nội dung |
-| --- | --- |
-| Vị trí | [ID mẫu, frame, vùng ảnh, đoạn văn hoặc mốc thời gian cần xem] |
-| Điểm chưa rõ | [Label, ranh giới, thuộc tính hoặc phạm vi đang cần quyết định] |
-| Dấu hiệu | [Dữ liệu quan sát được và dấu hiệu còn thiếu] |
-| Quyết định cần chốt | [Câu hỏi cụ thể gửi người phụ trách review] |
+Khi gửi ca khó, ghi số frame, vị trí, dấu hiệu đã thấy và câu hỏi cần chốt. Trước khi lưu, rà tên nhãn, hình học, phần bỏ sót và annotation trùng.
 
-Ghi rõ ai chốt và annotator cần làm gì trong lúc chờ. Khi có kết luận áp dụng cho các mẫu tương tự, thêm một dòng vào Phần 2 để cả nhóm dùng chung.
+## Cấu hình cho Job Runner
+
+Đặt đúng một khối `cvat-guideline` ở cuối file. Giữ `version` là `2`. Trong `labels`, khóa là tên nhãn trên CVAT, kể cả chữ hoa, dấu cách và dấu gạch dưới. Thay các tên ví dụ trong mẫu bằng tên thật của job.
+
+| Trường | Cách điền |
+|---|---|
+| `shape` | Bắt buộc cho mỗi nhãn. Dùng `rectangle`, `polygon`, `polyline`, `mask` hoặc `skeleton`. |
+| `sam3_prompt` | Tùy chọn. Dùng cụm ngắn như `plastic bottle` để điền sẵn trong SAM 3. Áp dụng cho Rectangle, Polygon, Polyline và Mask. |
+| `yolo_class` | Tùy chọn cho Rectangle. Dùng tên lớp COCO chính xác, ví dụ `bottle`. |
+| `bbox_min_score` | Ngưỡng YOLO tùy chọn, từ 0,30 đến 1. Mặc định 0,30. |
+| `bbox_min_area_px` | Diện tích Rectangle tối thiểu, số nguyên từ 150. Mặc định 150 px². |
+| `mask_min_score` | Ngưỡng nhận diện SAM 3, lớn hơn 0 và tối đa 1. Mặc định 0,50. |
+
+Với Skeleton, chỉ khai báo `shape` và cấu hình các điểm con theo COCO Pose trong CVAT. Nếu để trống mô tả SAM 3 hoặc lớp YOLO trong file, bạn có thể điền trong bảng nhãn của tool.
+
+Nạp file bằng **Chọn guideline**, tải nhãn từ job và xem nhật ký để phát hiện tên hoặc kiểu không khớp. Các quy tắc viết bằng chữ được đưa vào bản xem trước để người dùng rà kết quả.
